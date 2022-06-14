@@ -97,7 +97,7 @@ class SMPUnet(BaseSegmentor):
         decoder_attention_type = decode_head.get("attention_type", None)
         classes = decode_head.get("num_classes", 1)
         activation = decode_head.get("activation", None)
-
+        self._init_auxiliary_head(auxiliary_head)
         if "swin" in encoder_name:
             self.backbone = SwinWrapper(
                 encoder_name,
@@ -152,6 +152,32 @@ class SMPUnet(BaseSegmentor):
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
+
+    def _auxiliary_head_forward_train(self, x, img_metas, gt_semantic_seg):
+        """Run forward function and calculate loss for auxiliary head in
+        training."""
+        losses = dict()
+        if isinstance(self.auxiliary_head, nn.ModuleList):
+            for idx, aux_head in enumerate(self.auxiliary_head):
+                loss_aux = aux_head.forward_train(x, img_metas,
+                                                  gt_semantic_seg,
+                                                  self.train_cfg)
+                losses.update(add_prefix(loss_aux, f'aux_{idx}'))
+        else:
+            loss_aux = self.auxiliary_head.forward_train(
+                x, img_metas, gt_semantic_seg, self.train_cfg)
+            losses.update(add_prefix(loss_aux, 'aux'))
+
+
+    def _init_auxiliary_head(self, auxiliary_head):
+        """Initialize ``auxiliary_head``"""
+        if auxiliary_head is not None:
+            if isinstance(auxiliary_head, list):
+                self.auxiliary_head = nn.ModuleList()
+                for head_cfg in auxiliary_head:
+                    self.auxiliary_head.append(builder.build_head(head_cfg))
+            else:
+                self.auxiliary_head = builder.build_head(auxiliary_head)
 
     @force_fp32(apply_to=('seg_logit', ))
     def losses(self, seg_logit, seg_label):
@@ -251,7 +277,10 @@ class SMPUnet(BaseSegmentor):
         loss_decode = self._decode_head_forward_train(x, img_metas,
                                                       gt_semantic_seg)
         losses.update(loss_decode)
-
+        if self.with_auxiliary_head:
+            loss_aux = self._auxiliary_head_forward_train(
+                x, img_metas, gt_semantic_seg)
+            losses.update(loss_aux)
         return losses
 
     # TODO refactor
